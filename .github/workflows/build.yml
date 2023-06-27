@@ -1,0 +1,160 @@
+name: Build
+
+on: push
+permissions:
+  actions: write
+  contents: write
+
+env:
+  DOTNET_RUNTIME_TAG: "v7.0.8"
+
+jobs:
+  build-coreclr:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        arch: [x64]
+        configuration: [Release]
+        include:
+          - os: windows-latest
+            arch: x86
+            configuration: Release
+
+    steps:
+      - id: set-vars
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const os = "${{ matrix.os }}";
+            const arch = "${{ matrix.arch }}";
+            const configuration = "${{ matrix.configuration }}";
+
+            switch (os.split("-")[0]) {
+              case "ubuntu":
+                core.setOutput("extension", "so");
+                core.setOutput("os-name", "Linux");
+                core.setOutput("rid", "linux-" + arch);
+                core.setOutput("build-cmd", "./build.sh");
+                core.setOutput("dbg-ext", "dbg");
+                core.setOutput("extra-build-args", "--keepnativesymbols true");
+                break;
+
+              case "windows":
+                core.setOutput("extension", "dll");
+                core.setOutput("os-name", "windows");
+                core.setOutput("rid", "windows-" + arch);
+                core.setOutput("build-cmd", ".\\build.cmd");
+                core.setOutput("dbg-ext", "pdb");
+                core.setOutput("extra-build-args", "");
+                break;
+
+              case "macos":
+                core.setOutput("extension", "dylib");
+                core.setOutput("os-name", "OSX");
+                core.setOutput("rid", "macos-" + arch);
+                core.setOutput("build-cmd", "./build.sh");
+                core.setOutput("dbg-ext", "dsym");
+                core.setOutput("extra-build-args", "--keepnativesymbols true");
+                break;
+            }
+
+            core.setOutput("build-date", new Date().toISOString().split('T')[0].replace(/-/g, ''));
+
+      - uses: actions/checkout@v3
+        with:
+          repository: "dotnet/runtime"
+          ref: ${{ env.DOTNET_RUNTIME_TAG }}
+
+      - if: matrix.os == 'ubuntu-latest'
+        name: Install linux dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y libkrb5-dev liblttng-ust-dev
+
+      - name: Build
+        run: |
+          ${{ steps.set-vars.outputs.build-cmd }} clr+libs -c ${{ matrix.configuration }} -a ${{ matrix.arch }} /p:OfficialBuildId=${{ steps.set-vars.outputs.build-date }}.0 ${{ steps.set-vars.outputs.extra-build-args }}
+
+      - name: Collect final build
+        shell: bash
+        run: |
+          mkdir -p artifacts/ci/${{ steps.set-vars.outputs.rid }}
+          cp artifacts/bin/coreclr/${{ steps.set-vars.outputs.os-name }}.${{ matrix.arch }}.${{ matrix.configuration }}/${{ matrix.os != 'windows-latest' && 'lib{' || '{clretwrc,mscorrc,' }}clrgc,clrjit,coreclr,jitinterface_${{ matrix.arch }},mscordaccore,mscordbi}.${{ steps.set-vars.outputs.extension }} artifacts/ci/${{ steps.set-vars.outputs.rid }}/
+          cp artifacts/bin/coreclr/${{ steps.set-vars.outputs.os-name }}.${{ matrix.arch }}.${{ matrix.configuration }}/${{ matrix.os != 'windows-latest' && 'lib{' || '{clretwrc,mscorrc,' }}clrgc,clrjit,coreclr,jitinterface_${{ matrix.arch }},mscordaccore,mscordbi}.${{ steps.set-vars.outputs.dbg-ext }} artifacts/ci/${{ steps.set-vars.outputs.rid }}/ 2>/dev/null || :
+          cp artifacts/bin/coreclr/${{ steps.set-vars.outputs.os-name }}.${{ matrix.arch }}.${{ matrix.configuration }}/PDB/${{ matrix.os != 'windows-latest' && 'lib{' || '{clretwrc,mscorrc,' }}clrgc,clrjit,coreclr,jitinterface_${{ matrix.arch }},mscordaccore,mscordbi}.${{ steps.set-vars.outputs.dbg-ext }} artifacts/ci/${{ steps.set-vars.outputs.rid }}/ 2>/dev/null || :
+          cp artifacts/bin/coreclr/${{ steps.set-vars.outputs.os-name }}.${{ matrix.arch }}.${{ matrix.configuration }}/IL/System.Private.CoreLib.dll artifacts/ci/${{ steps.set-vars.outputs.rid }}/
+          cp artifacts/bin/runtime/net*-${{ steps.set-vars.outputs.os-name }}-${{ matrix.configuration }}-${{ matrix.arch }}/*.{dll,${{ steps.set-vars.outputs.extension }}} artifacts/ci/${{ steps.set-vars.outputs.rid }}/
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: ${{ steps.set-vars.outputs.rid }}-${{ matrix.configuration }}
+          path: |
+            artifacts/ci/${{ steps.set-vars.outputs.rid }}
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: mini-coreclr-${{ matrix.configuration }}
+          path: |
+            artifacts/ci/
+
+  build-mono-android:
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/dotnet-buildtools/prereqs:cbl-mariner-2.0-android
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, arm, x64, x86]
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          repository: "dotnet/runtime"
+          ref: ${{ env.DOTNET_RUNTIME_TAG }}
+
+      - name: Build
+        run: ./build.sh mono+libs --os Android --arch ${{ matrix.arch }} -c Release
+
+      - name: Collect final build
+        shell: bash
+        run: |
+          mkdir -p artifacts/ci/{native,managed}
+          mkdir artifacts/ci/native/include
+          cp artifacts/bin/mono/Android.${{ matrix.arch }}.Release/{lib*.so,System.Private.CoreLib.dll} artifacts/ci/native
+          cp -R artifacts/bin/mono/Android.${{ matrix.arch }}.Release/include/mono-2.0/mono artifacts/ci/native/include
+          cp artifacts/bin/runtime/net*-Android-Release-${{ matrix.arch }}/*.so artifacts/ci/native
+          cp artifacts/bin/runtime/net*-Android-Release-${{ matrix.arch }}/*.dll artifacts/ci/managed
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: android-${{ matrix.arch }}
+          path: artifacts/ci/
+
+  create_release:
+    needs:
+      - build-coreclr
+      - build-mono-android
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+      - name: Collect files
+        id: collect-info
+        run: |
+          mkdir release
+          cd artifacts
+          for i in */; do (cd "${i%/}" && zip -0 -r "../../release/${i%/}.zip" *) & done; wait
+          echo "::set-output name=release_tag::$(date +%Y%m%d).$GITHUB_RUN_NUMBER"
+      - name: Create release
+        uses: marvinpinto/action-automatic-releases@latest
+        with:
+          repo_token: "${{ secrets.GITHUB_TOKEN }}"
+          automatic_release_tag: ${{ steps.collect-info.outputs.release_tag }}
+          title: "Build ${{ steps.collect-info.outputs.release_tag }}"
+          files: |
+            release/*.zip
