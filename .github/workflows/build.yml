@@ -1,160 +1,147 @@
 name: Build
 
 on: push
-permissions:
-  actions: write
-  contents: write
+
+# concurrency:
+#   group: ${{ github.workflow }}-${{ github.ref }}
+#   cancel-in-progress: true
 
 env:
-  DOTNET_RUNTIME_TAG: "v7.0.8"
+  DOTNET_RUNTIME_TAG: "v9.0.1"
+  COMMON_BUILD_ARGS: "-ci -c Release /p:OfficialBuild=true /p:PreReleaseVersionLabel=bepinex /p:PreReleaseVersionIteration=${{ github.run_number }} /p:StabilizePackageVersion=false /p:VersionSuffixDateStamp= /p:_PatchNumber="
 
 jobs:
-  build-coreclr:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        arch: [x64]
-        configuration: [Release]
-        include:
-          - os: windows-latest
-            arch: x86
-            configuration: Release
+  # build-coreclr:
+  #   runs-on: ${{ matrix.os }}
+  #   container:
+  #     image: ${{ matrix.os == 'ubuntu-latest' && format('mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net9.0-cross-{0}', (matrix.arch == 'x64' && 'amd64' || matrix.arch)) || '' }}
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       os: [ubuntu-latest, windows-latest, macos-latest]
+  #       arch: [x64, arm64]
+  #       include:
+  #         - os: windows-latest
+  #           arch: x86
 
-    steps:
-      - id: set-vars
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const os = "${{ matrix.os }}";
-            const arch = "${{ matrix.arch }}";
-            const configuration = "${{ matrix.configuration }}";
+  #   steps:
+  #     - id: set-vars
+  #       uses: actions/github-script@v7
+  #       with:
+  #         script: |
+  #           const os = "${{ matrix.os }}";
+  #           const arch = "${{ matrix.arch }}";
 
-            switch (os.split("-")[0]) {
-              case "ubuntu":
-                core.setOutput("extension", "so");
-                core.setOutput("os-name", "Linux");
-                core.setOutput("rid", "linux-" + arch);
-                core.setOutput("build-cmd", "./build.sh");
-                core.setOutput("dbg-ext", "dbg");
-                core.setOutput("extra-build-args", "--keepnativesymbols true");
-                break;
+  #           switch (os.split("-")[0]) {
+  #             case "ubuntu":
+  #               core.setOutput("rid", "linux-" + arch);
+  #               core.setOutput("build-cmd", "./build.sh");
+  #               core.exportVariable("ROOTFS_DIR", "/crossrootfs/" + arch);
+  #               break;
 
-              case "windows":
-                core.setOutput("extension", "dll");
-                core.setOutput("os-name", "windows");
-                core.setOutput("rid", "windows-" + arch);
-                core.setOutput("build-cmd", ".\\build.cmd");
-                core.setOutput("dbg-ext", "pdb");
-                core.setOutput("extra-build-args", "");
-                break;
+  #             case "windows":
+  #               core.setOutput("rid", "win-" + arch);
+  #               core.setOutput("build-cmd", ".\\build.cmd");
+  #               break;
 
-              case "macos":
-                core.setOutput("extension", "dylib");
-                core.setOutput("os-name", "OSX");
-                core.setOutput("rid", "macos-" + arch);
-                core.setOutput("build-cmd", "./build.sh");
-                core.setOutput("dbg-ext", "dsym");
-                core.setOutput("extra-build-args", "--keepnativesymbols true");
-                break;
-            }
+  #             case "macos":
+  #               core.setOutput("rid", "osx-" + arch);
+  #               core.setOutput("build-cmd", "./build.sh");
+  #               break;
+  #           }
 
-            core.setOutput("build-date", new Date().toISOString().split('T')[0].replace(/-/g, ''));
+  #     - run: git config --system core.longpaths true
+  #     - run: git config --global --add safe.directory '*'
 
-      - uses: actions/checkout@v3
-        with:
-          repository: "dotnet/runtime"
-          ref: ${{ env.DOTNET_RUNTIME_TAG }}
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         repository: "dotnet/runtime"
+  #         ref: ${{ env.DOTNET_RUNTIME_TAG }}
 
-      - if: matrix.os == 'ubuntu-latest'
-        name: Install linux dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y libkrb5-dev liblttng-ust-dev
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         path: builder
 
-      - name: Build
-        run: |
-          ${{ steps.set-vars.outputs.build-cmd }} clr+libs -c ${{ matrix.configuration }} -a ${{ matrix.arch }} /p:OfficialBuildId=${{ steps.set-vars.outputs.build-date }}.0 ${{ steps.set-vars.outputs.extra-build-args }}
+  #     - name: Apply patches
+  #       shell: bash
+  #       run: git apply builder/patches/*.patch
 
-      - name: Collect final build
-        shell: bash
-        run: |
-          mkdir -p artifacts/ci/${{ steps.set-vars.outputs.rid }}
-          cp artifacts/bin/coreclr/${{ steps.set-vars.outputs.os-name }}.${{ matrix.arch }}.${{ matrix.configuration }}/${{ matrix.os != 'windows-latest' && 'lib{' || '{clretwrc,mscorrc,' }}clrgc,clrjit,coreclr,jitinterface_${{ matrix.arch }},mscordaccore,mscordbi}.${{ steps.set-vars.outputs.extension }} artifacts/ci/${{ steps.set-vars.outputs.rid }}/
-          cp artifacts/bin/coreclr/${{ steps.set-vars.outputs.os-name }}.${{ matrix.arch }}.${{ matrix.configuration }}/${{ matrix.os != 'windows-latest' && 'lib{' || '{clretwrc,mscorrc,' }}clrgc,clrjit,coreclr,jitinterface_${{ matrix.arch }},mscordaccore,mscordbi}.${{ steps.set-vars.outputs.dbg-ext }} artifacts/ci/${{ steps.set-vars.outputs.rid }}/ 2>/dev/null || :
-          cp artifacts/bin/coreclr/${{ steps.set-vars.outputs.os-name }}.${{ matrix.arch }}.${{ matrix.configuration }}/PDB/${{ matrix.os != 'windows-latest' && 'lib{' || '{clretwrc,mscorrc,' }}clrgc,clrjit,coreclr,jitinterface_${{ matrix.arch }},mscordaccore,mscordbi}.${{ steps.set-vars.outputs.dbg-ext }} artifacts/ci/${{ steps.set-vars.outputs.rid }}/ 2>/dev/null || :
-          cp artifacts/bin/coreclr/${{ steps.set-vars.outputs.os-name }}.${{ matrix.arch }}.${{ matrix.configuration }}/IL/System.Private.CoreLib.dll artifacts/ci/${{ steps.set-vars.outputs.rid }}/
-          cp artifacts/bin/runtime/net*-${{ steps.set-vars.outputs.os-name }}-${{ matrix.configuration }}-${{ matrix.arch }}/*.{dll,${{ steps.set-vars.outputs.extension }}} artifacts/ci/${{ steps.set-vars.outputs.rid }}/
+  #     - name: Build
+  #       run: |
+  #         ${{ steps.set-vars.outputs.build-cmd }} ${{ env.COMMON_BUILD_ARGS }} -cross -a ${{ matrix.arch }} -s clr+libs+packs.product
 
-      - uses: actions/upload-artifact@v3
-        with:
-          name: ${{ steps.set-vars.outputs.rid }}-${{ matrix.configuration }}
-          path: |
-            artifacts/ci/${{ steps.set-vars.outputs.rid }}
+  #     - shell: bash
+  #       run: |
+  #         mkdir -p ./result
+  #         cp ./artifacts/packages/Release/Shipping/Microsoft.NETCore.App.Runtime.${{ steps.set-vars.outputs.rid }}.*.symbols.nupkg ./result
 
-      - uses: actions/upload-artifact@v3
-        with:
-          name: mini-coreclr-${{ matrix.configuration }}
-          path: |
-            artifacts/ci/
+  #     - uses: actions/upload-artifact@v4
+  #       with:
+  #         name: coreclr-${{ steps.set-vars.outputs.rid }}
+  #         path: ./result
 
   build-mono-android:
     runs-on: ubuntu-latest
     container:
-      image: mcr.microsoft.com/dotnet-buildtools/prereqs:cbl-mariner-2.0-android
+      image: mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net9.0-cross-android-amd64
     strategy:
       fail-fast: false
       matrix:
         arch: [arm64, arm, x64, x86]
 
     steps:
-      - uses: actions/checkout@v3
+      - run: git config --global --add safe.directory '*'
+
+      - uses: actions/checkout@v4
         with:
           repository: "dotnet/runtime"
           ref: ${{ env.DOTNET_RUNTIME_TAG }}
 
-      - name: Build
-        run: ./build.sh mono+libs --os Android --arch ${{ matrix.arch }} -c Release
-
-      - name: Collect final build
-        shell: bash
-        run: |
-          mkdir -p artifacts/ci/{native,managed}
-          mkdir artifacts/ci/native/include
-          cp artifacts/bin/mono/Android.${{ matrix.arch }}.Release/{lib*.so,System.Private.CoreLib.dll} artifacts/ci/native
-          cp -R artifacts/bin/mono/Android.${{ matrix.arch }}.Release/include/mono-2.0/mono artifacts/ci/native/include
-          cp artifacts/bin/runtime/net*-Android-Release-${{ matrix.arch }}/*.so artifacts/ci/native
-          cp artifacts/bin/runtime/net*-Android-Release-${{ matrix.arch }}/*.dll artifacts/ci/managed
-
-      - uses: actions/upload-artifact@v3
+      - uses: actions/checkout@v4
         with:
-          name: android-${{ matrix.arch }}
-          path: artifacts/ci/
+          path: builder
+
+      - name: Apply patches
+        shell: bash
+        run: git apply builder/patches/*.patch
+
+      - name: Build
+        run: ./build.sh ${{ env.COMMON_BUILD_ARGS }} -os android -arch ${{ matrix.arch }} -s mono+libs+packs.product /p:MonoLibClang=/usr/local/lib/libclang.so
+
+      - run: |
+          mkdir -p ./result
+          cp ./artifacts/packages/Release/Shipping/Microsoft.NETCore.App.Runtime.Mono.android-${{ matrix.arch }}.*.symbols.nupkg ./result
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mono-android-${{ matrix.arch }}
+          path: ./result
 
   create_release:
     needs:
-      - build-coreclr
+      # - build-coreclr
       - build-mono-android
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
+
       - name: Collect files
-        id: collect-info
         run: |
           mkdir release
           cd artifacts
           for i in */; do (cd "${i%/}" && zip -0 -r "../../release/${i%/}.zip" *) & done; wait
-          echo "::set-output name=release_tag::$(date +%Y%m%d).$GITHUB_RUN_NUMBER"
+
       - name: Create release
-        uses: marvinpinto/action-automatic-releases@latest
+        uses: marvinpinto/action-automatic-releases@e28f6161c2a80b613d05f8cd6b6bad2d5f7a1ea4
         with:
           repo_token: "${{ secrets.GITHUB_TOKEN }}"
-          automatic_release_tag: ${{ steps.collect-info.outputs.release_tag }}
-          title: "Build ${{ steps.collect-info.outputs.release_tag }}"
+          prerelease: true
+          automatic_release_tag: "${{ env.DOTNET_RUNTIME_TAG }}-bepinex.${{ github.run_number }}"
           files: |
             release/*.zip
