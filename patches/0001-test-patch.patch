@@ -1,0 +1,25 @@
+From 1b7492993396a3c9564032a57be147c0222e8f28 Mon Sep 17 00:00:00 2001
+From: js6pak <me@6pak.dev>
+Date: Tue, 4 Feb 2025 00:00:39 +0100
+Subject: [PATCH] test patch
+
+---
+ Directory.Build.targets | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Directory.Build.targets b/Directory.Build.targets
+index e870a3f04..db676b32a 100644
+--- a/Directory.Build.targets
++++ b/Directory.Build.targets
+@@ -74,7 +74,7 @@
+ 
+   <PropertyGroup>
+     <PackageDescription Condition="'$(PackageDescription)' == '' and '$(Description)' != ''">$(Description)</PackageDescription>
+-    <RuntimePackageDisclaimer>Internal implementation package not meant for direct consumption. Please do not reference directly.</RuntimePackageDisclaimer>
++    <RuntimePackageDisclaimer>test</RuntimePackageDisclaimer>
+     <UseRuntimePackageDisclaimer Condition="'$(UseRuntimePackageDisclaimer)' == '' and
+                                             ($(MSBuildProjectName.StartsWith('runtime.native')) or '$(PackageTargetRuntime)' != '')">true</UseRuntimePackageDisclaimer>
+     <PackageDescription Condition="'$(PackageDescription)' != '' and '$(UseRuntimePackageDisclaimer)' == 'true'">$(RuntimePackageDisclaimer) %0A$(PackageDescription)</PackageDescription>
+-- 
+2.47.1
+
